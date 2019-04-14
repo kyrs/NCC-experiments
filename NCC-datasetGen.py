@@ -20,7 +20,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 class NCCDataGen(object):
-	def __init__(self,ni=30000,saveFile= "",minSize=10,maxSize = 100):
+	def __init__(self,ni=30000,saveFile= "",minSize=100,maxSize = 1000):
 		"""
 		ni : total no of training example set
 		saveFile : address where the data is gonna be saved 
@@ -77,7 +77,8 @@ class NCCDataGen(object):
 	def noise(self,x):
 		## generate noise for the given input x
 		supportX = np.linspace(min(x)-np.std(x),max(x)+np.std(x),4)
-		noise = np.random.uniform(min(x)-np.std(x),max(x)+np.std(x),len(x))        ## sampling uniformally
+		noise = np.linspace(min(x)-np.std(x),max(x)+np.std(x),len(x))
+		# noise = np.random.uniform(min(x)-np.std(x),max(x)+np.std(x),len(x))        
 		vij = interpolate.UnivariateSpline(supportX,np.random.uniform(0,5,len(supportX)))(noise.flatten())[:,np.newaxis]
 		vn = np.random.uniform(0,5,1)
 		return vn*np.random.randn(len(x),1)*vij
@@ -93,8 +94,16 @@ class NCCDataGen(object):
 
 			for idx,size in enumerate(sizeList):
 				K = np.random.randint(1,5)
-				meanSampStd= np.random.uniform(0,5)
-				varSampStd = np.random.uniform(0,5)
+				meanSampVar= np.random.uniform(0,5)## variance of GMM mean term
+				varSampVar = np.random.uniform(0,5)## variance of GMM covariance term
+
+				## calculating the std 
+				meanSampStd = np.abs(np.power(meanSampVar,0.5))
+				varSampStd  = np.abs(np.power(varSampVar,0.5))
+
+				# meanSampStd = meanSampVar
+				# varSampStd = varSampVar 
+
 				dKnot = np.random.randint(4,5)
 				xn = self.GMM(K=K,meanSampStd=meanSampStd,varSampStd=varSampStd,size=size)
 				yn = self.Yn(dKnot,xn)
@@ -122,5 +131,5 @@ class NCCDataGen(object):
 				print("idx :",idx)
 
 if __name__ =="__main__":
-	obj = NCCDataGen(saveFile = "./casual-data-gen-30K.json")
+	obj = NCCDataGen(saveFile = "./casual-data-gen-30K.json-original")
 	obj.Run()
