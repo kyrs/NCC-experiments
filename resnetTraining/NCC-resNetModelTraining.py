@@ -14,15 +14,17 @@ from datasets import dataset_factory
 from nets import resnet_v1,nets_factory
 from preprocessing import vgg_preprocessing ## vgg_preprocessing is the default pre processing for all resnet model
 import numpy as np
+import os 
 slim = tf.contrib.slim
-
+from bs4 import BeautifulSoup
+from collections import Counter
 # try:
 # 	import urllib2
 # except ImportError:
 # 	import urllib.request as urllib
 
 class trainResnetWeight(object):
-	def __init__ (self,modelPath,optimizer=tf.train.RMSPropOptimizer,batchSize="",learningRate=0.001,decayPerIter="",train="",vocClass=20,modelName="resnet_v1_50"):
+	def __init__ (self,modelPath,optimizer=tf.train.RMSPropOptimizer,dataAnnotationDir = "",imageFolder= "",batchSize="",learningRate=0.001,decayPerIter="",train="",vocClass=20,modelName="resnet_v1_50"):
 		self.modelPath=modelPath ## we are using the pb file for loading the variables 
 		self.modelName = modelName
 		self.imageSize = resnet_v1.resnet_v1_50.default_image_size
@@ -34,7 +36,11 @@ class trainResnetWeight(object):
 		self.isNCCTrain = train
 		self.gpuPercent=0.3
 
+		self.annotateDir = dataAnnotationDir
+		self.classLabel={'person': 0, 'chair': 1, 'car': 2, 'dog': 3, 'bottle': 4, 'cat': 5, 'bird': 6, 'pottedplant': 7, 'sheep': 8, 'boat': 9, 'aeroplane': 10, 'tvmonitor': 11, 'sofa': 12, 'bicycle': 13, 'horse': 14, 'motorbike': 15, 'diningtable': 16, 'cow': 17, 'train': 18, 'bus': 19}
+
 	def imagePreProcess(self):
+		## function for doing image pre-processing
 		batchImage = []
 		self.resNetInput = tf.placeholder( tf.uint8,shape=[2,300,300,3],name="resNetInput")
 		listTensorProcess = tf.unstack(self.resNetInput)
@@ -47,6 +53,31 @@ class trainResnetWeight(object):
 		self.processedImage = tf.concat(batchImage,axis=0)
 		return self.processedImage
 
+	def loadAnnotationFile(self):
+		## loading the annotation file:
+		#https://github.com/mprat/pascal-voc-python/blob/master/vocimgs.ipynb
+
+		######Ahhhhhhhhhh so many for loops .. solve it 
+		dataset = {}
+		for root,dirs,files in os.walk(self.annotateDir):
+			for elm in files:
+				fileName = os.path.join(self.annotateDir,elm)
+				with open(fileName,"r") as f:
+					xml =f.readlines()
+					xml = ''.join([line.strip('\t') for line in xml])
+					annXml = BeautifulSoup(xml)
+					oneHotEncode = [0]*20
+					objs = annXml.findAll('object')
+					for obj in objs:
+						obj_names = obj.findChildren('name')
+						for nameTag in obj_names:
+							if nameTag.contents[0] in self.classLabel:
+								oneHotEncode[ self.classLabel[nameTag.contents[0]] ] = 1
+							else:
+								continue
+					dataset[annXml.filename.string] = oneHotEncode
+		
+		self.data = dataset
 	def networkGenResNet(self,imageProcessed):
 		## this file point to the network of  the model being used.
 		with slim.arg_scope(resnet_v1.resnet_arg_scope()):
@@ -131,15 +162,15 @@ class trainResnetWeight(object):
 		dataNp = self.readData()
 		img,probabilities,feature = self.resNetSess.run([self.processedImage,self.probability,self.endPoint['global_pool']],feed_dict={self.resNetInput:dataNp})
 		sqzFeature =  np.squeeze( np.squeeze(feature,axis =1),axis=1) ## squeezing 1,2 axis of the feature vector
-		probabilities = probabilities[1, 0:]
-		sortedInds = [i[0] for i in sorted(enumerate(-probabilities), key=lambda x:x[1])]
-		names = imagenet.create_readable_names_for_imagenet_labels()
-		for i in range(5):
-			index = sortedInds[i]
-			# Shift the index of a class name by one. 
-			print('Probability %0.2f%% => [%s]' % (probabilities[index] * 100, names[index+1]))
+		# probabilities = probabilities[1, 0:]
+		# sortedInds = [i[0] for i in sorted(enumerate(-probabilities), key=lambda x:x[1])]
+		# names = imagenet.create_readable_names_for_imagenet_labels()
+		# for i in range(5):
+		# 	index = sortedInds[i]
+		# 	# Shift the index of a class name by one. 
+		# 	print('Probability %0.2f%% => [%s]' % (probabilities[index] * 100, names[index+1]))
 
-		print(sqzFeature.shape)
+		# print(sqzFeature.shape)
 
 
 	def readData(self):
@@ -154,7 +185,7 @@ class trainResnetWeight(object):
 		out =np.concatenate(arr,axis=0)
 		return out
 if __name__ =="__main__":
-	obj = trainResnetWeight(modelPath=".\\slim-imagenet\\resnet_v1_50.ckpt")
-	obj.Run()
+	obj = trainResnetWeight(modelPath=".\\slim-imagenet\\resnet_v1_50.ckpt",dataAnnotationDir="..\\pascal-voc\\VOCdevkit\\VOC2012\\Annotations")
+	obj.loadAnnotationFile()
 
 
