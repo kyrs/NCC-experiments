@@ -9,7 +9,7 @@ from collections import Counter
 import random
 import numpy as np 
 class NCCTrain(object):
-	def __init__(self,fileName,trainSplitRatio=0.7,saveDir="./model",sizeEmbLayer=100,sizeClassfLayer=100,dropOutRatio=0.25,iterVal=25,batchSize=256,activation=tf.nn.relu,batchNorm=True,optimizer =tf.train.RMSPropOptimizer,intLrRate=0.0001):
+	def __init__(self,fileName,trainSplitRatio=0.7,saveDir="./model",sizeEmbLayer=50,sizeClassfLayer=50,dropOutRatio=0.15,iterVal=25,batchSize=256,activation=tf.nn.relu,batchNorm=True,optimizer =tf.train.RMSPropOptimizer,intLrRate=0.0001):
 		"""
 		fileName : file to be processed
 		trainSplitRatio : ration of train :test data to consider for training v/s testing
