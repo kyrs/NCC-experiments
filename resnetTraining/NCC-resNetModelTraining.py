@@ -22,11 +22,17 @@ slim = tf.contrib.slim
 # 	import urllib.request as urllib
 
 class trainResnetWeight(object):
-	def __init__ (self,modelPath,modelName="resnet_v1_50",batchSize=2):
+	def __init__ (self,modelPath,optimizer=tf.train.RMSPropOptimizer,batchSize="",learningRate=0.001,decayPerIter="",train="",vocClass=20,modelName="resnet_v1_50"):
 		self.modelPath=modelPath ## we are using the pb file for loading the variables 
 		self.modelName = modelName
 		self.imageSize = resnet_v1.resnet_v1_50.default_image_size
-		# self.imageFile = []
+		self.vocClass=20
+		self.optimizer = optimizer
+		self.batchSize = ""
+		self.ilr = learningRate
+		self.decayIter = decayPerIter
+		self.isNCCTrain = train
+		self.gpuPercent=0.3
 
 	def imagePreProcess(self):
 		batchImage = []
@@ -41,7 +47,7 @@ class trainResnetWeight(object):
 		self.processedImage = tf.concat(batchImage,axis=0)
 		return self.processedImage
 
-	def networkGen(self,imageProcessed):
+	def networkGenResNet(self,imageProcessed):
 		## this file point to the network of  the model being used.
 		with slim.arg_scope(resnet_v1.resnet_arg_scope()):
 			self.logits,self.endPoint = resnet_v1.resnet_v1_50(imageProcessed,num_classes=1000,is_training=False)
@@ -54,31 +60,87 @@ class trainResnetWeight(object):
 		self.modelPath,
 		slim.get_model_variables())
 
+
+
+	def networkGenNCC(self):
+		## this section deals with the graph for resnet model
+		with tf.name_scope("resnetFeatureExt"): 
+			self.NCCinputResFet = tf.placeholder(tf.float32,shape = [None,2048],name="inputVector")
+			self.NCCclassLabel = tf.placeholder(tf.float32,shape = [None,20],name="classLabel") ## taking one hot encoded vector
+			self.NCCnet1 = tf.layers.dense(self.NCCinputResFet,512, name = "embDense1")
+			self.NCCnet1Relu = tf.nn.relu(self.NCCnet1)
+			self.NCCnet2 = tf.layers.dense(self.NCCnet1Relu,512,name="embDense2")
+			self.NCCnet2Relu = tf.nn.relu(self.NCCnet2)
+			self.NCClogit = tf.layers.dense(self.NCCnet2Relu,self.vocClass,name="logit")
+			self.NCCpredictions = tf.nn.sigmoid(self.NCClogit, name='predictions')
+
+		with tf.name_scope("loss"):
+			self.NCCloss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels = self.NCCclassLabel, logits = self.NCClogit))
+			self.NCCtrainOp = self.optimizer(self.ilr).minimize(self.NCCloss)
+
+		with tf.name_scope('accuracy'):
+			self.NCCcorrectPredictions = tf.round(self.NCCpredictions)
+			correctPredictions = tf.equal(tf.round(self.NCCpredictions), self.NCCclassLabel)
+			self.NCCaccuracy = tf.reduce_mean(tf.cast(correctPredictions, "float"), name='accuracy')
+
+		with tf.name_scope('num_correct'):
+			correct = tf.equal(tf.round(self.NCCpredictions), self.NCCclassLabel)
+			self.NCCnoCorrect = tf.reduce_sum(tf.cast(correct, 'float'))
+
+
+
+
+
 	def buildResnetGraph(self):
 		## building the resnet graph for the processing
 		processedImage = self.imagePreProcess()
-		prob = self.networkGen(processedImage)
+		prob = self.networkGenResNet(processedImage)
 		self.loadingVariable() 
-	def Run(self):
-		## function for running the model for any given image
-		with tf.Session() as sess:
-			self.buildResnetGraph()
-			self.initFn(sess) ## initializing the resnet model
-			# self.imageFile = 
-			dataNp = self.readData()
-			
-			img,probabilities,feature = sess.run([self.processedImage,self.probability,self.endPoint['global_pool']],feed_dict={self.resNetInput:dataNp})
-			
-			sqzFeature =  np.squeeze( np.squeeze(feature,axis =1),axis=1) ## squeezing 1,2 axis of the feature vector
-			probabilities = probabilities[1, 0:]
-			sortedInds = [i[0] for i in sorted(enumerate(-probabilities), key=lambda x:x[1])]
-			names = imagenet.create_readable_names_for_imagenet_labels()
-			for i in range(5):
-				index = sortedInds[i]
-				# Shift the index of a class name by one. 
-				print('Probability %0.2f%% => [%s]' % (probabilities[index] * 100, names[index+1]))
 
-			print(sqzFeature.shape)
+
+	def graphLoad(self):
+		## given function create a set of graph and session variable so that feature ext and trainig can happen seperately
+
+		gpuOptions = tf.GPUOptions(per_process_gpu_memory_fraction=self.gpuPercent)
+		config=tf.ConfigProto(gpu_options=gpuOptions)
+
+		###### loading resnet graph ###############
+		self.resNetGraph = tf.Graph()
+		with self.resNetGraph.as_default():
+			self.buildResnetGraph()
+			
+			# self.initFn()
+
+		self.resNetSess = tf.Session(graph=self.resNetGraph,config=config)
+
+		# with self.resNetSess as sess1:
+		self.initFn(self.resNetSess)
+		######### loading NCC graph ###############
+		self.NCCRes = tf.Graph()
+		with self.NCCRes.as_default():
+			self.networkGenNCC()
+
+		self.NCCResSess = tf.Session(graph=self.NCCRes,config=config)
+
+
+
+
+	def Run(self):
+		## function for loading the graph for processing
+		self.graphLoad()
+		dataNp = self.readData()
+		img,probabilities,feature = self.resNetSess.run([self.processedImage,self.probability,self.endPoint['global_pool']],feed_dict={self.resNetInput:dataNp})
+		sqzFeature =  np.squeeze( np.squeeze(feature,axis =1),axis=1) ## squeezing 1,2 axis of the feature vector
+		probabilities = probabilities[1, 0:]
+		sortedInds = [i[0] for i in sorted(enumerate(-probabilities), key=lambda x:x[1])]
+		names = imagenet.create_readable_names_for_imagenet_labels()
+		for i in range(5):
+			index = sortedInds[i]
+			# Shift the index of a class name by one. 
+			print('Probability %0.2f%% => [%s]' % (probabilities[index] * 100, names[index+1]))
+
+		print(sqzFeature.shape)
+
 
 	def readData(self):
 	## read image from a list of file address 
