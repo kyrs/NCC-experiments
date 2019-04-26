@@ -18,19 +18,20 @@ import os
 slim = tf.contrib.slim
 from bs4 import BeautifulSoup
 from collections import Counter
+import random
 # try:
 # 	import urllib2
 # except ImportError:
 # 	import urllib.request as urllib
 
 class trainResnetWeight(object):
-	def __init__ (self,modelPath,optimizer=tf.train.RMSPropOptimizer,split=0.75,dataAnnotationDir = "",imageFolder= "",batchSize="",learningRate=0.001,decayPerIter="",train="",vocClass=20,modelName="resnet_v1_50"):
+	def __init__ (self,modelPath,optimizer=tf.train.RMSPropOptimizer,split=0.75,batchSize = 16,dataAnnotationDir = "",noEpoch = 5,imageFolder= "",learningRate=0.001,decayPerIter="",train=True,vocClass=20,modelName="resnet_v1_50"):
 		self.modelPath=modelPath ## we are using the pb file for loading the variables 
 		self.modelName = modelName
 		self.imageSize = resnet_v1.resnet_v1_50.default_image_size
 		self.vocClass=20
 		self.optimizer = optimizer
-		self.batchSize = ""
+		self.batchSize = batchSize
 		self.ilr = learningRate
 		self.decayIter = decayPerIter
 		self.isNCCTrain = train
@@ -40,10 +41,13 @@ class trainResnetWeight(object):
 		self.annotateDir = dataAnnotationDir
 		self.classLabel={'person': 0, 'chair': 1, 'car': 2, 'dog': 3, 'bottle': 4, 'cat': 5, 'bird': 6, 'pottedplant': 7, 'sheep': 8, 'boat': 9, 'aeroplane': 10, 'tvmonitor': 11, 'sofa': 12, 'bicycle': 13, 'horse': 14, 'motorbike': 15, 'diningtable': 16, 'cow': 17, 'train': 18, 'bus': 19}
 		self.seed =  np.random.seed(1)
+		self.train = train
+		self.noEpoch = noEpoch
 	def imagePreProcess(self):
 		## function for doing image pre-processing
 		batchImage = []
-		self.resNetInput = tf.placeholder( tf.uint8,shape=[2,300,300,3],name="resNetInput")
+		# self.resBatchSize =tf.placeholder( tf.int32,name="resNetBatch") 
+		self.resNetInput = tf.placeholder(tf.uint8,shape=[self.batchSize,300,300,3],name="resNetInput")
 		listTensorProcess = tf.unstack(self.resNetInput)
 		for imageContent in listTensorProcess:
 			# img = i.eval()
@@ -60,14 +64,17 @@ class trainResnetWeight(object):
 
 		######Ahhhhhhhhhh so many for loops .. solve it 
 		dataset = {}
+		fileCounter = 0
 		for root,dirs,files in os.walk(self.annotateDir):
-			for elm in files:
+			for elm in files[:16*100]:
 				fileName = os.path.join(self.annotateDir,elm)
 				with open(fileName,"r") as f:
 					xml =f.readlines()
 					xml = ''.join([line.strip('\t') for line in xml])
 					annXml = BeautifulSoup(xml)
-					oneHotEncode = [0]*20
+					oneHotEncode = [0]*self.vocClass
+					fileCounter+=1
+					print ("fileLoaded : %d "%(fileCounter))
 					objs = annXml.findAll('object')
 					for obj in objs:
 						obj_names = obj.findChildren('name')
@@ -84,8 +91,8 @@ class trainResnetWeight(object):
 		random.shuffle(imageList)
 		trainList = imageList[:int(len(imageList)*self.splitRatio)]
 		testList = imageList[int(len(imageList)*self.splitRatio):]
-		self.trainData = {(image,dataset[image]) for image in trainList } ## declaring train Data
-		self.testData = {(image,dataset[image]) for image in testList } ## declaring test Data 
+		self.trainData = [(image,dataset[image]) for image in trainList ] ## declaring train Data
+		self.testData = [(image,dataset[image]) for image in testList ] ## declaring test Data 
 
 	def networkGenResNet(self,imageProcessed):
 		## this file point to the network of  the model being used.
@@ -153,27 +160,49 @@ class trainResnetWeight(object):
 
 		self.resNetSess = tf.Session(graph=self.resNetGraph,config=config)
 
+		with self.resNetGraph.as_default():
+			self.initFn(self.resNetSess)
 		# with self.resNetSess as sess1:
-		self.initFn(self.resNetSess)
+		
 		######### loading NCC graph ###############
 		self.NCCRes = tf.Graph()
+			
+		self.NCCResSess = tf.Session(graph=self.NCCRes,config=config)
+		
 		with self.NCCRes.as_default():
 			self.networkGenNCC()
-
-		self.NCCResSess = tf.Session(graph=self.NCCRes,config=config)
-
+			assert self.NCCinputResFet.graph is self.NCCRes
+			if self.train:
+				self.NCCResSess.run(tf.global_variables_initializer())
+			else:
+				pass
 
 
 
 	def Run(self):
 		## function for loading the graph for processing
 		self.graphLoad()
-		for idx in range(len)
-		dataNp = self.readData()
-		img,probabilities,feature = self.resNetSess.run([self.processedImage,self.probability,self.endPoint['global_pool']],feed_dict={self.resNetInput:dataNp})
-		sqzFeature =  np.squeeze( np.squeeze(feature,axis =1),axis=1) ## squeezing 1,2 axis of the feature vector
+		self.loadAnnotationFile() ## loading the training data 
+			
+		epc = 0
+		while(epc < self.noEpoch):
+			batchCnt = 0
+			for i in range(0, len(self.trainData),self.batchSize):
+				trainPart = self.trainData[i:i+self.batchSize]
+				trainImage = [os.path.join(self.imageFolder,content[0]) for content in trainPart]
+				trainLabel = [content[1] for content in trainPart]
+				trainLabelMat = np.vstack(trainLabel)
+				 
+				dataNp = self.readData(trainImage)
+				img,probabilities,feature = self.resNetSess.run([self.processedImage,self.probability,self.endPoint['global_pool']],feed_dict={self.resNetInput:dataNp})
+				sqzFeature =  np.squeeze( np.squeeze(feature,axis =1),axis=1) ## squeezing 1,2 axis of the feature vector
 		
-
+				## running the training of second network seperatley 
+				with self.NCCRes.as_default():
+					loss,_ =  self.NCCResSess.run([self.NCCloss,self.NCCtrainOp], feed_dict = {self.NCCinputResFet:sqzFeature,self.NCCclassLabel:trainLabel})
+				batchCnt+=1
+				print ("training epoch : %d batch iter : %d loss : %f"%(epc,batchCnt,loss))
+			epc+=1
 	def readData(self,dataList):
 	## read image from a list of file address 
 		arr = []
@@ -188,6 +217,5 @@ class trainResnetWeight(object):
 		return out
 if __name__ =="__main__":
 	obj = trainResnetWeight(modelPath=".\\slim-imagenet\\resnet_v1_50.ckpt",dataAnnotationDir="..\\pascal-voc\\VOCdevkit\\VOC2012\\Annotations",imageFolder="..\\pascal-voc\\VOCdevkit\\VOC2012\\JPEGImages")
-	obj.loadAnnotationFile()
-
+	obj.Run()
 
