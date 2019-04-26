@@ -24,7 +24,7 @@ from collections import Counter
 # 	import urllib.request as urllib
 
 class trainResnetWeight(object):
-	def __init__ (self,modelPath,optimizer=tf.train.RMSPropOptimizer,dataAnnotationDir = "",imageFolder= "",batchSize="",learningRate=0.001,decayPerIter="",train="",vocClass=20,modelName="resnet_v1_50"):
+	def __init__ (self,modelPath,optimizer=tf.train.RMSPropOptimizer,split=0.75,dataAnnotationDir = "",imageFolder= "",batchSize="",learningRate=0.001,decayPerIter="",train="",vocClass=20,modelName="resnet_v1_50"):
 		self.modelPath=modelPath ## we are using the pb file for loading the variables 
 		self.modelName = modelName
 		self.imageSize = resnet_v1.resnet_v1_50.default_image_size
@@ -35,10 +35,11 @@ class trainResnetWeight(object):
 		self.decayIter = decayPerIter
 		self.isNCCTrain = train
 		self.gpuPercent=0.3
-
+		self.splitRatio = split
+		self.imageFolder = imageFolder
 		self.annotateDir = dataAnnotationDir
 		self.classLabel={'person': 0, 'chair': 1, 'car': 2, 'dog': 3, 'bottle': 4, 'cat': 5, 'bird': 6, 'pottedplant': 7, 'sheep': 8, 'boat': 9, 'aeroplane': 10, 'tvmonitor': 11, 'sofa': 12, 'bicycle': 13, 'horse': 14, 'motorbike': 15, 'diningtable': 16, 'cow': 17, 'train': 18, 'bus': 19}
-
+		self.seed =  np.random.seed(1)
 	def imagePreProcess(self):
 		## function for doing image pre-processing
 		batchImage = []
@@ -77,7 +78,15 @@ class trainResnetWeight(object):
 								continue
 					dataset[annXml.filename.string] = oneHotEncode
 		
+
 		self.data = dataset
+		imageList = list(dataset.keys())
+		random.shuffle(imageList)
+		trainList = imageList[:int(len(imageList)*self.splitRatio)]
+		testList = imageList[int(len(imageList)*self.splitRatio):]
+		self.trainData = {(image,dataset[image]) for image in trainList } ## declaring train Data
+		self.testData = {(image,dataset[image]) for image in testList } ## declaring test Data 
+
 	def networkGenResNet(self,imageProcessed):
 		## this file point to the network of  the model being used.
 		with slim.arg_scope(resnet_v1.resnet_arg_scope()):
@@ -159,24 +168,17 @@ class trainResnetWeight(object):
 	def Run(self):
 		## function for loading the graph for processing
 		self.graphLoad()
+		for idx in range(len)
 		dataNp = self.readData()
 		img,probabilities,feature = self.resNetSess.run([self.processedImage,self.probability,self.endPoint['global_pool']],feed_dict={self.resNetInput:dataNp})
 		sqzFeature =  np.squeeze( np.squeeze(feature,axis =1),axis=1) ## squeezing 1,2 axis of the feature vector
-		# probabilities = probabilities[1, 0:]
-		# sortedInds = [i[0] for i in sorted(enumerate(-probabilities), key=lambda x:x[1])]
-		# names = imagenet.create_readable_names_for_imagenet_labels()
-		# for i in range(5):
-		# 	index = sortedInds[i]
-		# 	# Shift the index of a class name by one. 
-		# 	print('Probability %0.2f%% => [%s]' % (probabilities[index] * 100, names[index+1]))
+		
 
-		# print(sqzFeature.shape)
-
-
-	def readData(self):
+	def readData(self,dataList):
 	## read image from a list of file address 
 		arr = []
-		data = ["./cat-pet-animal-domestic-104827.jpeg","./First_Student_IC_school_bus_202076.jpg"]	
+		# data = ["./cat-pet-animal-domestic-104827.jpeg","./First_Student_IC_school_bus_202076.jpg"]
+		data = dataList	
 		for img in data:
 			imagePt = Image.open(img)
 			img = imagePt.resize((300,300))
@@ -185,7 +187,7 @@ class trainResnetWeight(object):
 		out =np.concatenate(arr,axis=0)
 		return out
 if __name__ =="__main__":
-	obj = trainResnetWeight(modelPath=".\\slim-imagenet\\resnet_v1_50.ckpt",dataAnnotationDir="..\\pascal-voc\\VOCdevkit\\VOC2012\\Annotations")
+	obj = trainResnetWeight(modelPath=".\\slim-imagenet\\resnet_v1_50.ckpt",dataAnnotationDir="..\\pascal-voc\\VOCdevkit\\VOC2012\\Annotations",imageFolder="..\\pascal-voc\\VOCdevkit\\VOC2012\\JPEGImages")
 	obj.loadAnnotationFile()
 
 
