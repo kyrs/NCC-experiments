@@ -25,7 +25,7 @@ import random
 # 	import urllib.request as urllib
 
 class trainResnetWeight(object):
-	def __init__ (self,modelPath,optimizer=tf.train.RMSPropOptimizer,split=0.75,batchSize = 16,dataAnnotationDir = "",noEpoch = 5,imageFolder= "",learningRate=0.001,decayPerIter="",train=True,vocClass=20,modelName="resnet_v1_50"):
+	def __init__ (self,modelPath,optimizer=tf.train.RMSPropOptimizer,split=0.75,dirToSave="./NCCmodel",batchSize = 16,dataAnnotationDir = "",noEpoch = 5,imageFolder= "",learningRate=0.001,decayPerIter="",train=True,vocClass=20,modelName="resnet_v1_50"):
 		self.modelPath=modelPath ## we are using the pb file for loading the variables 
 		self.modelName = modelName
 		self.imageSize = resnet_v1.resnet_v1_50.default_image_size
@@ -43,6 +43,25 @@ class trainResnetWeight(object):
 		self.seed =  np.random.seed(1)
 		self.train = train
 		self.noEpoch = noEpoch
+
+		self.saveDir = dirToSave
+		############# path for model and summary  #############
+		self.modelAdd   = os.path.join(self.saveDir,"model")
+		self.summaryAdd = os.path.join(self.saveDir,"summary")
+
+		if os.path.isdir(self.modelAdd):
+			pass
+		else:
+			os.mkdir(self.modelAdd)
+
+		if os.path.isdir(self.summaryAdd):
+			pass
+		else:
+			os.mkdir(self.summaryAdd)
+
+		self.modelAdd = self.modelAdd+"/NCCResnetModel"
+		self.summaryAdd = self.summaryAdd+"/summaryWriter"
+
 	def imagePreProcess(self):
 		## function for doing image pre-processing
 		batchImage = []
@@ -66,7 +85,7 @@ class trainResnetWeight(object):
 		dataset = {}
 		fileCounter = 0
 		for root,dirs,files in os.walk(self.annotateDir):
-			for elm in files[:16*100]:
+			for elm in files:
 				fileName = os.path.join(self.annotateDir,elm)
 				with open(fileName,"r") as f:
 					xml =f.readlines()
@@ -91,8 +110,25 @@ class trainResnetWeight(object):
 		random.shuffle(imageList)
 		trainList = imageList[:int(len(imageList)*self.splitRatio)]
 		testList = imageList[int(len(imageList)*self.splitRatio):]
+
+		####################################################################################
+
+
+		## NOTE  : for given experiment because of limitation induced by using tf.unstack to have defined no of batchSize  we are using 
+		##  example of len n*self.batchSize in both training and testing process 
+
+		## look for an alternate to solve it
+		####################################################################################   
 		self.trainData = [(image,dataset[image]) for image in trainList ] ## declaring train Data
+
+		trainLt = (len(self.trainData)//self.batchSize)*self.batchSize
+		self.trainData = self.trainData[:trainLt]
+
 		self.testData = [(image,dataset[image]) for image in testList ] ## declaring test Data 
+		testLt = (len(self.testData)//self.batchSize)*self.batchSize
+		self.testData = self.trainData[:testLt]
+
+		print(len(self.trainData),len(self.testData))
 
 	def networkGenResNet(self,imageProcessed):
 		## this file point to the network of  the model being used.
@@ -134,6 +170,12 @@ class trainResnetWeight(object):
 			correct = tf.equal(tf.round(self.NCCpredictions), self.NCCclassLabel)
 			self.NCCnoCorrect = tf.reduce_sum(tf.cast(correct, 'float'))
 
+		## merging the summary operation 
+		with tf.name_scope("summary"):
+			tf.summary.scalar('loss_train',self.NCCloss)
+			self.summaryOp = tf.summary.merge_all()
+
+			self.writer = tf.summary.FileWriter(self.summaryAdd, tf.get_default_graph())
 
 
 
@@ -177,7 +219,11 @@ class trainResnetWeight(object):
 			else:
 				pass
 
-
+	def saveModel(self):
+		## function for saving the model 
+		with self.NCCRes.as_default():
+			saver=tf.train.Saver()
+			saver.save(self.NCCResSess, self.modelAdd) 
 
 	def Run(self):
 		## function for loading the graph for processing
@@ -199,10 +245,38 @@ class trainResnetWeight(object):
 		
 				## running the training of second network seperatley 
 				with self.NCCRes.as_default():
-					loss,_ =  self.NCCResSess.run([self.NCCloss,self.NCCtrainOp], feed_dict = {self.NCCinputResFet:sqzFeature,self.NCCclassLabel:trainLabel})
+					loss,_,summ =  self.NCCResSess.run([self.NCCloss,self.NCCtrainOp,self.summaryOp], feed_dict = {self.NCCinputResFet:sqzFeature,self.NCCclassLabel:trainLabelMat})
 				batchCnt+=1
+				self.writer.add_summary(summ)
 				print ("training epoch : %d batch iter : %d loss : %f"%(epc,batchCnt,loss))
 			epc+=1
+		
+		print ("saving the model...")
+		self.saveModel()
+		######### doing the testing of the model #########
+		accList = []
+		noCorrect = 0
+		for i in range(0, len(self.testData),self.batchSize):
+			testPart = self.testData[i:i+self.batchSize]
+			testImage = [os.path.join(self.imageFolder,content[0]) for content in testPart]
+			testLabel = [content[1] for content in trainPart]
+			testLabelMat = np.vstack(trainLabel)
+			 
+			dataNpTest = self.readData(testImage)
+			img,probabilities,testFeature = self.resNetSess.run([self.processedImage,self.probability,self.endPoint['global_pool']],feed_dict={self.resNetInput:dataNpTest})
+			sqztestFeature =  np.squeeze( np.squeeze(testFeature,axis =1),axis=1) ## squeezing 1,2 axis of the feature vector
+	
+			## running the training of second network seperatley 
+			with self.NCCRes.as_default():
+				acc,noCorrect =  self.NCCResSess.run([self.NCCaccuracy,self.NCCnoCorrect], feed_dict = {self.NCCinputResFet:sqztestFeature,self.NCCclassLabel:testLabelMat})
+			accList.append(acc)
+			noCorrect+=noCorrect
+
+		print ("test acc : %f "%(np.mean(accList)))
+
+
+
+
 	def readData(self,dataList):
 	## read image from a list of file address 
 		arr = []
