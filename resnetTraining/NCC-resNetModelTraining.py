@@ -19,6 +19,8 @@ slim = tf.contrib.slim
 from bs4 import BeautifulSoup
 from collections import Counter
 import random
+import cv2
+import json
 # try:
 # 	import urllib2
 # except ImportError:
@@ -40,7 +42,9 @@ class trainResnetWeight(object):
 		self.imageFolder = imageFolder
 		self.annotateDir = dataAnnotationDir
 		self.classLabel={'person': 0, 'chair': 1, 'car': 2, 'dog': 3, 'bottle': 4, 'cat': 5, 'bird': 6, 'pottedplant': 7, 'sheep': 8, 'boat': 9, 'aeroplane': 10, 'tvmonitor': 11, 'sofa': 12, 'bicycle': 13, 'horse': 14, 'motorbike': 15, 'diningtable': 16, 'cow': 17, 'train': 18, 'bus': 19}
-		self.seed =  np.random.seed(1)
+		self.antiLabel = dict([(value, key) for key, value in self.classLabel.items()])
+		self.seedNP =  np.random.seed(1)
+		self.seedRd = random.seed(1)
 		self.train = train
 		self.noEpoch = noEpoch
 
@@ -213,11 +217,12 @@ class trainResnetWeight(object):
 		
 		with self.NCCRes.as_default():
 			self.networkGenNCC()
-			assert self.NCCinputResFet.graph is self.NCCRes
+			assert (self.NCCinputResFet.graph is self.NCCRes)
 			if self.train:
 				self.NCCResSess.run(tf.global_variables_initializer())
 			else:
-				pass
+				saver=tf.train.Saver()
+				saver.restore(self.NCCResSess,self.modelAdd)
 
 	def saveModel(self):
 		## function for saving the model 
@@ -259,8 +264,8 @@ class trainResnetWeight(object):
 		for i in range(0, len(self.testData),self.batchSize):
 			testPart = self.testData[i:i+self.batchSize]
 			testImage = [os.path.join(self.imageFolder,content[0]) for content in testPart]
-			testLabel = [content[1] for content in trainPart]
-			testLabelMat = np.vstack(trainLabel)
+			testLabel = [content[1] for content in testPart]
+			testLabelMat = np.vstack(testLabel)
 			 
 			dataNpTest = self.readData(testImage)
 			img,probabilities,testFeature = self.resNetSess.run([self.processedImage,self.probability,self.endPoint['global_pool']],feed_dict={self.resNetInput:dataNpTest})
@@ -268,13 +273,46 @@ class trainResnetWeight(object):
 	
 			## running the training of second network seperatley 
 			with self.NCCRes.as_default():
-				acc,noCorrect =  self.NCCResSess.run([self.NCCaccuracy,self.NCCnoCorrect], feed_dict = {self.NCCinputResFet:sqztestFeature,self.NCCclassLabel:testLabelMat})
+				acc,cor =  self.NCCResSess.run([self.NCCaccuracy,self.NCCnoCorrect], feed_dict = {self.NCCinputResFet:sqztestFeature,self.NCCclassLabel:testLabelMat})
 			accList.append(acc)
-			noCorrect+=noCorrect
+			noCorrect+=cor
 
-		print ("test acc : %f "%(np.mean(accList)))
+		print ("total Example : %f correct : %f acc : %f "%(len(self.testData),noCorrect,np.mean(accList)))
 
+	def checkModelPred(self):
+		## method to load the model  and check result for few examples
+		assert (self.train is False)
 
+		self.graphLoad()
+		self.loadAnnotationFile()
+		
+		testPart = self.testData[0:self.batchSize]
+		testImage = [os.path.join(self.imageFolder,content[0]) for content in testPart]
+		testLabel = [content[1] for content in testPart]
+		testLabelMat = np.vstack(testLabel)
+		 
+		dataNpTest = self.readData(testImage)
+		img,probabilities,testFeature = self.resNetSess.run([self.processedImage,self.probability,self.endPoint['global_pool']],feed_dict={self.resNetInput:dataNpTest})
+		sqztestFeature =  np.squeeze( np.squeeze(testFeature,axis =1),axis=1) ## squeezing 1,2 axis of the feature vector
+
+		## running the training of second network seperatley 
+		print(testPart)
+		with self.NCCRes.as_default():
+			out,prob =  self.NCCResSess.run([self.NCCcorrectPredictions,self.NCCpredictions], feed_dict = {self.NCCinputResFet:sqztestFeature,self.NCCclassLabel:testLabelMat})
+
+		for imgIdx,image in enumerate(testImage):
+			label = out[imgIdx,:]
+			print()
+			print(prob[imgIdx,:])
+			for labelIdx, item  in enumerate(label):
+				if (item >0.5):
+					print(self.antiLabel[labelIdx])
+				else:
+					continue	
+			readIm = cv2.imread(image)
+
+			cv2.imshow("image",readIm)
+			cv2.waitKey(0)
 
 
 	def readData(self,dataList):
@@ -289,7 +327,84 @@ class trainResnetWeight(object):
 			arr.append(imgArr[np.newaxis,...])
 		out =np.concatenate(arr,axis=0)
 		return out
-if __name__ =="__main__":
-	obj = trainResnetWeight(modelPath=".\\slim-imagenet\\resnet_v1_50.ckpt",dataAnnotationDir="..\\pascal-voc\\VOCdevkit\\VOC2012\\Annotations",imageFolder="..\\pascal-voc\\VOCdevkit\\VOC2012\\JPEGImages")
-	obj.Run()
 
+
+
+	def createDataNCCTest(self):
+		## following function create json file of feature vectors to test casual direction using existing model. 
+		#NOTE :
+		## we are using both train and test data for feature identification.
+		 
+		self.graphLoad()
+		self.loadAnnotationFile()
+			
+		newimageList = list(self.data.keys())
+		random.shuffle(newimageList)
+
+		noElmPerclass = self.batchSize*50
+
+		classDict = {}
+		## there is gonna be redundancy in calculation 
+		print(newimageList)
+		for image in newimageList:
+			classPerImage = self.data[image]
+
+			for idx,val in enumerate (classPerImage):
+				if val == 1:
+					if self.antiLabel[idx] not in classDict:
+						classDict[self.antiLabel[idx]] = [image]
+					else:
+						if (len(classDict[self.antiLabel[idx]])<noElmPerclass):
+							classDict[self.antiLabel[idx]].append(image)
+						else:
+							pass
+					
+				else:
+					continue
+		
+		assert (self.train is False) ## run only in testing
+		## extracting the feature of per class
+		cnt = 0
+		print("pass here..")
+		print(classDict.keys())
+		
+		with open("resnetModelFeatureVector.json","w") as fetVectorWriter:
+			for className in classDict:
+				cnt+=1
+				print("count label : %d count name : %s"%(cnt,className))
+				classId = self.classLabel[className]
+
+				dataPerClass = classDict[className]
+				idxLt = (len(dataPerClass)//self.batchSize)*self.batchSize
+				dataPerClass = dataPerClass[:idxLt]
+
+				featureLogitDict = {}
+				for idx in range(512):
+					featureLogitDict[idx]={"trainX":[],"trainY":[],"className":className,"featureIdx":idx,"label":"-"}## matching the fomat of other code
+
+				for i in range(0,len(dataPerClass),self.batchSize):
+
+					testPart = dataPerClass[i:i+self.batchSize]
+					testImage = [os.path.join(self.imageFolder,image) for image in testPart]
+					
+					 
+					dataNpTest = self.readData(testImage)
+					img,probabilities,testFeature = self.resNetSess.run([self.processedImage,self.probability,self.endPoint['global_pool']],feed_dict={self.resNetInput:dataNpTest})
+					sqztestFeature =  np.squeeze( np.squeeze(testFeature,axis =1),axis=1) ## squeezing 1,2 axis of the feature vector
+
+					## running the training of second network seperatley 
+					with self.NCCRes.as_default():
+						logit,feature =  self.NCCResSess.run([self.NCClogit,self.NCCnet2], feed_dict = {self.NCCinputResFet:sqztestFeature})		
+
+					trainY = logit[:,classId]
+					for idx in range(512):
+						featureLogitDict[idx]["trainY"].extend(trainY.ravel().tolist())
+						featureLogitDict[idx]["trainX"].extend(feature[:,idx].ravel().tolist())
+
+				for elm in featureLogitDict:
+					json.dump(featureLogitDict[elm],fetVectorWriter)
+					fetVectorWriter.write("\n")
+
+if __name__ =="__main__":
+	obj = trainResnetWeight(modelPath=".\\slim-imagenet\\resnet_v1_50.ckpt",train=False,dataAnnotationDir="..\\pascal-voc\\VOCdevkit\\VOC2012\\Annotations",imageFolder="..\\pascal-voc\\VOCdevkit\\VOC2012\\JPEGImages")
+	obj.createDataNCCTest()
