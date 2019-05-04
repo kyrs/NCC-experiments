@@ -8,6 +8,7 @@ import os
 from collections import Counter
 import random
 import numpy as np 
+import pickle
 class NCCTrain(object):
 	def __init__(self,fileName,trainSplitRatio=0.7,saveDir="./model",sizeEmbLayer=100,sizeClassfLayer=100,dropOutRatio=0.25,iterVal=25,batchSize=256,activation=tf.nn.relu,batchNorm=True,optimizer =tf.train.RMSPropOptimizer,intLrRate=0.0001):
 		"""
@@ -313,11 +314,48 @@ class NCCTrain(object):
 					
 					print("count : ",count, "correct : ",correct)
 
+	def predictOverResnet(self,NCCData):
+		## for predicting model class label
+
+		saveMapper = "FeatureResNetMapNCC.pickle"
+		NCCProbMap = {}
+		with tf.Session() as sess:
+			self.buildNetwork()
+			saver=tf.train.Saver()
+			saver.restore(sess, self.modelAdd)
+
+			with open(NCCData,"r+") as NCCDataReader,open(saveMapper,"wb") as saveMapWriter:
+				for line in NCCDataReader:
+					data = json.loads(line)
+					idx = data["featureIdx"]
+					className = data["className"]
+					testInputX,testInputY,testLabel = self.returnArray([data])
+					testInputX = testInputX[...,np.newaxis]
+					testInputY = testInputY[...,np.newaxis]
+					prob = sess.run([self.prob],{self.xVal:testInputX,self.yVal:testInputY,self.isTrain:False,self.keepProb:np.array([1.0])})
+
+					# print(prob[0])
+					print(prob[0][0],idx,className)
+					if prob[0][0][0]>0.5:
+						NCCLbl = "anticasual"
+					else:
+						NCCLbl = "casual"
+					if className not in NCCProbMap:
+						NCCProbMap[className] = [{"idx":idx,"prob":prob[0][0],"NCC":NCCLbl}]
+					else:
+						NCCProbMap[className].append({"idx":idx,"prob":prob[0][0],"NCC":NCCLbl})
+
+				pickle.dump(NCCProbMap,saveMapWriter, protocol=pickle.HIGHEST_PROTOCOL)
+
 if __name__=="__main__":
 	obj = NCCTrain(fileName="./casual-data-gen-30K.json-original")
 	# obj.Run()
 	
 
 	### #######code to test output on tubenghen dataset ############### 
-	obj.testModel(tubDataset="./tubehengenDataFormat.json")
+	# obj.testModel(tubDataset="./tubehengenDataFormat.json")
+	################################################################
+
+	### #######code to test output on NCC Resnet dataset ############### 
+	obj.predictOverResnet(NCCData="./resnetTraining/resnetModelFeatureVector.json")
 	################################################################
