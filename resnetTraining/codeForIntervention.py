@@ -167,7 +167,7 @@ def boxPlot(feat, orignalFeat, antiCasIdx,casIdx):
 			Num+=np.abs(obF1[index] - origF1[index])
 			Den+= np.abs(origF1[index])
 
-	featCasList.append(Num/Den)
+		featCasList.append(Num/Den)
 
 
 	############### calculating for object feature vector #############
@@ -178,7 +178,7 @@ def boxPlot(feat, orignalFeat, antiCasIdx,casIdx):
 			Num+=np.abs(obF1[index] - origF1[index])
 			Den+= np.abs(origF1[index])
 
-	featAntiCasList.append(Num/Den)
+		featAntiCasList.append(Num/Den)
 
 	return featCasList,featAntiCasList
 
